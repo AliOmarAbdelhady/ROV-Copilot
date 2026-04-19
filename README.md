@@ -15,7 +15,9 @@ Open `http://127.0.0.1:5000`.
 - Accepts latitude, longitude, heading, and keel depth.
 - Compares the iceberg track against Hibernia, Hebron, Sea Rose, and Terra Nova.
 - Calculates platform and subsea threat levels using the rules from the provided PDFs.
-- Draws an inline SVG graph of the iceberg trajectory and platform positions.
+- Draws a rendered matplotlib track plot with geographic grid labels.
+- Exports the full result as a PDF report.
+- Uses a two-step input flow so Enter moves from position input to track input.
 
 ## Validation
 

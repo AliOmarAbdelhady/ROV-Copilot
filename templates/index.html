@@ -7,81 +7,88 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   </head>
   <body>
-    <main class="page-shell">
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">2026 MATE ROV Mission</p>
+    <main class="app-shell">
+      <form method="post" class="panel control-panel" data-input-form>
+        <div class="panel-topline">
           <h1>Iceberg Threat Assessment</h1>
-          <p class="lede">
-            Enter an iceberg position, heading, and keel depth. The app compares the mission input
-            against the fixed platform constants for Hibernia, Hebron, Sea Rose, and Terra Nova,
-            then returns platform and subsea threat levels with a trajectory graph.
-          </p>
+          <div class="top-actions">
+            <button type="submit" class="button primary">Analyze</button>
+            {% if result %}
+            <a
+              class="button secondary"
+              href="{{ url_for('export_pdf', latitude='%.6f'|format(result.latitude), longitude='%.6f'|format(result.longitude|abs), heading='%.2f'|format(result.heading), keel_depth='%.2f'|format(result.keel_depth)) }}"
+            >
+              Export PDF
+            </a>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="controls-grid">
+          <label class="field">
+            <span>Latitude N</span>
+            <input type="text" name="latitude" value="{{ form.latitude }}" placeholder="47.39.00" autocomplete="off" inputmode="decimal" pattern="[0-9]+(?:\.[0-9]+){0,2}" data-nav-input>
+          </label>
+          <label class="field">
+            <span>Longitude W</span>
+            <input type="text" name="longitude" value="{{ form.longitude }}" placeholder="48.37.00" autocomplete="off" inputmode="decimal" pattern="[0-9]+(?:\.[0-9]+){0,2}" data-nav-input>
+          </label>
+          <label class="field field-short">
+            <span>Heading</span>
+            <input type="number" step="0.1" name="heading" value="{{ form.heading }}" placeholder="158" autocomplete="off" inputmode="decimal" data-nav-input>
+          </label>
+          <label class="field field-short">
+            <span>Keel Depth</span>
+            <input type="number" step="0.1" min="0" name="keel_depth" value="{{ form.keel_depth }}" placeholder="99" autocomplete="off" inputmode="decimal" data-nav-input>
+          </label>
+        </div>
+
+        {% if error %}
+        <p class="error">{{ error }}</p>
+        {% endif %}
+      </form>
+
+      {% if result %}
+      <section class="summary-strip">
+        <div class="stat-chip">
+          <span>Lat</span>
+          <strong>{{ result.latitude_label }}</strong>
+        </div>
+        <div class="stat-chip">
+          <span>Lon</span>
+          <strong>{{ result.longitude_label }}</strong>
+        </div>
+        <div class="stat-chip">
+          <span>Heading</span>
+          <strong>{{ "%.0f"|format(result.heading) }}°</strong>
+        </div>
+        <div class="stat-chip">
+          <span>Keel</span>
+          <strong>{{ "%.1f"|format(result.keel_depth) }} m</strong>
         </div>
       </section>
 
-      <section class="content-grid">
-        <form method="post" class="panel mission-form">
-          <h2>Mission Input</h2>
-          <label>
-            Latitude
-            <input name="latitude" value="{{ form.latitude }}" placeholder="47o39’00” North">
-          </label>
-          <label>
-            Longitude
-            <input name="longitude" value="{{ form.longitude }}" placeholder="48o37’00” West">
-          </label>
-          <label>
-            Heading
-            <input name="heading" value="{{ form.heading }}" placeholder="158o">
-          </label>
-          <label>
-            Keel Depth
-            <input name="keel_depth" value="{{ form.keel_depth }}" placeholder="99 meters">
-          </label>
-          <button type="submit">Analyze Mission</button>
-          <p class="hint">
-            DMS and decimal inputs are both accepted. Example: <code>47o39’00” North</code> or
-            <code>47.65</code>.
-          </p>
-          {% if error %}
-          <p class="error">{{ error }}</p>
-          {% endif %}
-        </form>
-
-        <section class="panel rules-card">
-          <h2>Rules Applied</h2>
-          <ul>
-            <li>Platform threat: red if under 5 nm, yellow if 5 to 10 nm, green if over 10 nm.</li>
-            <li>Platform threat becomes green if the iceberg would ground before arrival.</li>
-            <li>Subsea threat is only considered inside a 25 nm subsea zone.</li>
-            <li>Inside 25 nm: red at 90% to 110% of local depth, yellow at 70% to 90%, green otherwise.</li>
-          </ul>
-          <p class="hint">
-            Platform depths and coordinates are taken from the PDF table you provided.
-          </p>
-        </section>
-      </section>
-
-      {% if result %}
-      <section class="results">
-        <div class="panel summary-card">
-          <div class="summary-heading">
-            <div>
-              <p class="eyebrow">Parsed Mission</p>
-              <h2>Threat Output</h2>
-            </div>
-            <div class="mission-values">
-              <span>{{ "%.4f"|format(result.latitude) }}° lat</span>
-              <span>{{ "%.4f"|format(result.longitude) }}° lon</span>
-              <span>{{ "%.0f"|format(result.heading) }}° heading</span>
-              <span>{{ "%.1f"|format(result.keel_depth) }} m keel</span>
-            </div>
+      <section class="dashboard-grid">
+        <section class="panel plot-panel">
+          <div class="section-bar">
+            <h2>Track</h2>
           </div>
+          <div class="graph-frame">
+            <img
+              src="data:image/png;base64,{{ result.graph_png }}"
+              alt="Iceberg track plot with platform positions"
+              class="plot-image"
+            >
+          </div>
+        </section>
 
+        <section class="panel threat-panel">
+          <div class="section-bar">
+            <h2>Threats</h2>
+          </div>
           <div class="threat-columns">
-            <div>
-              <h3>Platform Threat Level</h3>
+            <div class="threat-group">
+              <h3>Platform</h3>
               <ul class="threat-list">
                 {% for assessment in result.assessments %}
                 <li>
@@ -91,74 +98,53 @@
                 {% endfor %}
               </ul>
             </div>
-
-            <div>
-              <h3>Subsea Asset Threat Level</h3>
+            <div class="threat-group">
+              <h3>Subsea</h3>
               <ul class="threat-list">
                 {% for assessment in result.assessments %}
                 <li>
                   <span class="platform-name">{{ assessment.platform.name }}</span>
                   <span class="badge badge-{{ assessment.subsea_threat|lower }}">{{ assessment.subsea_threat }}</span>
-                  {% if assessment.subsea_reason %}
-                  <span class="reason">({{ assessment.subsea_reason }})</span>
-                  {% endif %}
                 </li>
                 {% endfor %}
               </ul>
             </div>
           </div>
-        </div>
+        </section>
 
-        <div class="panel graph-card">
-          <div class="graph-header">
-            <div>
-              <p class="eyebrow">Trajectory Graph</p>
-              <h2>Iceberg Track vs. Platforms</h2>
-            </div>
-            <p class="hint">Outer marker ring = subsea threat. Inner marker = platform threat.</p>
+        <section class="panel details-panel">
+          <div class="section-bar">
+            <h2>Details</h2>
           </div>
-          <div class="graph-frame">
-            {{ result.graph_svg }}
+          <div class="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Platform</th>
+                  <th>Distance</th>
+                  <th>Depth</th>
+                  <th>Platform</th>
+                  <th>Subsea</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for assessment in result.assessments %}
+                <tr>
+                  <td>{{ assessment.platform.name }}</td>
+                  <td>{{ "%.2f"|format(assessment.distance_nm) }} nm</td>
+                  <td>{{ "%.0f"|format(assessment.platform.depth_m) }} m</td>
+                  <td><span class="table-badge badge badge-{{ assessment.platform_threat|lower }}">{{ assessment.platform_threat }}</span></td>
+                  <td><span class="table-badge badge badge-{{ assessment.subsea_threat|lower }}">{{ assessment.subsea_threat }}</span></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
           </div>
-        </div>
-
-        <div class="panel details-card">
-          <h2>Detailed Assessment</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Platform</th>
-                <th>Distance to Track</th>
-                <th>Water Depth</th>
-                <th>Platform Threat</th>
-                <th>Subsea Threat</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for assessment in result.assessments %}
-              <tr>
-                <td>{{ assessment.platform.name }}</td>
-                <td>{{ "%.2f"|format(assessment.distance_nm) }} nm</td>
-                <td>{{ "%.0f"|format(assessment.platform.depth_m) }} m</td>
-                <td>
-                  {{ assessment.platform_threat }}
-                  {% if assessment.platform_reason %}
-                  <div class="table-note">{{ assessment.platform_reason }}</div>
-                  {% endif %}
-                </td>
-                <td>
-                  {{ assessment.subsea_threat }}
-                  {% if assessment.subsea_reason %}
-                  <div class="table-note">{{ assessment.subsea_reason }}</div>
-                  {% endif %}
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
+        </section>
       </section>
       {% endif %}
     </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
   </body>
 </html>

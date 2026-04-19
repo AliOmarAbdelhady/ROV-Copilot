@@ -1,11 +1,11 @@
 import unittest
 
-from threat_logic import assess_mission, parse_coordinate, parse_heading, parse_keel_depth
+from threat_logic import assess_mission, parse_coordinate, parse_heading, parse_keel_depth, render_report_pdf, render_track_preview_png
 
 
 EXAMPLES = {
     "A": {
-        "input": ("47o39’00” North", "48o37’00” West", "158o", "99 meters"),
+        "input": ("47.39.00", "48.37.00", "158", "99"),
         "platform": {
             "Hibernia": "Green",
             "Hebron": "Green",
@@ -20,7 +20,7 @@ EXAMPLES = {
         },
     },
     "B": {
-        "input": ("47o58’00” North", "48o50’00” West", "180o", "78 meters"),
+        "input": ("47.58.00", "48.50.00", "180", "78"),
         "platform": {
             "Hibernia": "Red",
             "Hebron": "Green",
@@ -35,7 +35,7 @@ EXAMPLES = {
         },
     },
     "C": {
-        "input": ("47o53’00” North", "47o51’00” West", "188o", "112 meters"),
+        "input": ("47.53.00", "47.51.00", "188", "112"),
         "platform": {
             "Hibernia": "Green",
             "Hebron": "Green",
@@ -50,7 +50,7 @@ EXAMPLES = {
         },
     },
     "D": {
-        "input": ("47o40’00” North", "49o25’00” West", "152o", "60 meters"),
+        "input": ("47.40.00", "49.25.00", "152", "60"),
         "platform": {
             "Hibernia": "Red",
             "Hebron": "Red",
@@ -65,7 +65,7 @@ EXAMPLES = {
         },
     },
     "E": {
-        "input": ("47o45’00” North", "48o29’00” West", "198o", "84 meters"),
+        "input": ("47.45.00", "48.29.00", "198", "84"),
         "platform": {
             "Hibernia": "Yellow",
             "Hebron": "Green",
@@ -80,7 +80,7 @@ EXAMPLES = {
         },
     },
     "F": {
-        "input": ("47o56’00” North", "47o45’00” West", "181o", "126 meters"),
+        "input": ("47.56.00", "47.45.00", "181", "126"),
         "platform": {
             "Hibernia": "Green",
             "Hebron": "Green",
@@ -98,14 +98,23 @@ EXAMPLES = {
 
 
 class ThreatLogicTests(unittest.TestCase):
-    def test_coordinate_parser_accepts_decimal_and_dms(self):
-        self.assertAlmostEqual(parse_coordinate("47o39’00” North", "latitude"), 47.65)
-        self.assertAlmostEqual(parse_coordinate("48o37’00” West", "longitude"), -48.6166666667)
-        self.assertAlmostEqual(parse_coordinate("-48.4", "longitude"), -48.4)
+    def test_coordinate_parser_accepts_decimal_and_degree_dot_inputs(self):
+        self.assertAlmostEqual(parse_coordinate("47.65", "latitude"), 47.65)
+        self.assertAlmostEqual(parse_coordinate("48.4", "longitude"), -48.4)
+        self.assertAlmostEqual(parse_coordinate("47.39", "latitude"), 47.65)
+        self.assertAlmostEqual(parse_coordinate("48.37.00", "longitude"), -48.6166666667)
+        with self.assertRaisesRegex(ValueError, "Latitude must use digits and decimal points only."):
+            parse_coordinate("47o39’00” North", "latitude")
+        with self.assertRaisesRegex(ValueError, "Longitude must use digits and decimal points only."):
+            parse_coordinate("-48.4", "longitude")
 
     def test_heading_and_keel_depth_parsers(self):
-        self.assertEqual(parse_heading("518o"), 158.0)
-        self.assertEqual(parse_keel_depth("99 meters"), 99.0)
+        self.assertEqual(parse_heading("518"), 158.0)
+        self.assertEqual(parse_keel_depth("99"), 99.0)
+        with self.assertRaisesRegex(ValueError, "Heading must be a decimal number."):
+            parse_heading("158o")
+        with self.assertRaisesRegex(ValueError, "Keel depth must be a decimal number."):
+            parse_keel_depth("99 meters")
 
     def test_official_examples_match_expected_outputs(self):
         for example_name, example in EXAMPLES.items():
@@ -120,6 +129,19 @@ class ThreatLogicTests(unittest.TestCase):
             subsea_lookup = {item.platform.name: item.subsea_threat for item in assessments}
             self.assertEqual(platform_lookup, example["platform"], msg=f"Platform mismatch for example {example_name}")
             self.assertEqual(subsea_lookup, example["subsea"], msg=f"Subsea mismatch for example {example_name}")
+
+    def test_plot_and_pdf_renderers_return_binary_outputs(self):
+        latitude = parse_coordinate("47.39.00", "latitude")
+        longitude = parse_coordinate("48.37.00", "longitude")
+        heading = parse_heading("158")
+        keel_depth = parse_keel_depth("99")
+        assessments = assess_mission(latitude, longitude, heading, keel_depth)
+
+        preview_png = render_track_preview_png(latitude, longitude, heading, assessments)
+        report_pdf = render_report_pdf(latitude, longitude, heading, keel_depth, assessments)
+
+        self.assertTrue(preview_png.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertTrue(report_pdf.startswith(b"%PDF"))
 
 
 if __name__ == "__main__":

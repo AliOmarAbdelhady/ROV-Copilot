@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import math
+import os
 import re
+import warnings
 from dataclasses import dataclass
+from io import BytesIO
 from typing import Iterable
 
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+warnings.filterwarnings("ignore", message="Unable to import Axes3D.*")
+
+import matplotlib
+matplotlib.use("Agg")
+from matplotlib import colors as mcolors
+from matplotlib import pyplot as plt
+from matplotlib.ticker import FuncFormatter, MultipleLocator
 
 PLATFORM_DISPLAY_ORDER = ["Hibernia", "Hebron", "Sea Rose", "Terra Nova"]
 
@@ -12,6 +23,12 @@ COLOR_HEX = {
     "Green": "#1b7f46",
     "Yellow": "#c78c0a",
     "Red": "#c03a2b",
+}
+
+THREAT_FILL = {
+    "Green": mcolors.to_rgba(COLOR_HEX["Green"], 0.16),
+    "Yellow": mcolors.to_rgba(COLOR_HEX["Yellow"], 0.16),
+    "Red": mcolors.to_rgba(COLOR_HEX["Red"], 0.16),
 }
 
 
@@ -47,82 +64,69 @@ def ordered_platforms() -> Iterable[Platform]:
 
 
 def parse_coordinate(raw_value: str, kind: str) -> float:
-    text = (raw_value or "").strip()
-    if not text:
-        raise ValueError(f"{kind.title()} is required.")
-
-    normalized = (
-        text.lower()
-        .replace("°", " ")
-        .replace("º", " ")
-        .replace("o", " ")
-        .replace("’", " ")
-        .replace("'", " ")
-        .replace("”", " ")
-        .replace('"', " ")
-        .replace(",", " ")
-    )
-    hemisphere = None
-    for label, sign in (
-        ("north", 1),
-        ("n", 1),
-        ("south", -1),
-        ("s", -1),
-        ("east", 1),
-        ("e", 1),
-        ("west", -1),
-        ("w", -1),
-    ):
-        if re.search(rf"\b{label}\b", normalized):
-            hemisphere = sign
-            break
-
-    values = re.findall(r"-?\d+(?:\.\d+)?", normalized)
-    if not values:
-        raise ValueError(f"Could not parse {kind}.")
-
-    if len(values) == 1:
-        absolute = abs(float(values[0]))
-    else:
-        degrees = abs(float(values[0]))
-        minutes = float(values[1])
-        seconds = float(values[2]) if len(values) > 2 else 0.0
-        if not 0.0 <= minutes < 60.0:
-            raise ValueError(f"{kind.title()} minutes must be between 0 and 59.")
-        if not 0.0 <= seconds < 60.0:
-            raise ValueError(f"{kind.title()} seconds must be between 0 and 59.")
-        absolute = degrees + (minutes / 60.0) + (seconds / 3600.0)
-
-    if hemisphere is not None:
-        sign = hemisphere
-    elif float(values[0]) < 0:
-        sign = -1
-    else:
-        sign = 1
-
-    value = sign * absolute
+    value = _parse_coordinate_input(raw_value, kind)
+    if kind == "longitude":
+        value = -value
     _validate_coordinate_range(value, kind)
     return value
 
 
 def parse_heading(raw_value: str) -> float:
-    text = (raw_value or "").strip().lower().replace("°", " ").replace("o", " ")
-    values = re.findall(r"-?\d+(?:\.\d+)?", text)
-    if not values:
-        raise ValueError("Heading is required.")
-    heading = float(values[0])
+    heading = _parse_decimal_input(raw_value, "Heading is required.", "Heading must be a decimal number.")
     return heading % 360.0
 
 
 def parse_keel_depth(raw_value: str) -> float:
-    text = (raw_value or "").strip().lower()
-    values = re.findall(r"-?\d+(?:\.\d+)?", text)
-    if not values:
-        raise ValueError("Keel depth is required.")
-    value = float(values[0])
+    value = _parse_decimal_input(raw_value, "Keel depth is required.", "Keel depth must be a decimal number.")
     if value <= 0:
         raise ValueError("Keel depth must be greater than zero.")
     return value
+
+
+def _parse_decimal_input(raw_value: str, empty_message: str, invalid_message: str) -> float:
+    text = (raw_value or "").strip()
+    if not text:
+        raise ValueError(empty_message)
+    if not re.fullmatch(r"-?(?:\d+\.?\d*|\.\d+)", text):
+        raise ValueError(invalid_message)
+    return float(text)
+
+
+def _parse_unsigned_decimal_input(raw_value: str, empty_message: str, invalid_message: str) -> float:
+    text = (raw_value or "").strip()
+    if not text:
+        raise ValueError(empty_message)
+    if not re.fullmatch(r"(?:\d+\.?\d*|\.\d+)", text):
+        raise ValueError(invalid_message)
+    return float(text)
+
+
+def _parse_coordinate_input(raw_value: str, kind: str) -> float:
+    text = (raw_value or "").strip()
+    if not text:
+        raise ValueError(f"{kind.title()} is required.")
+    if not re.fullmatch(r"\d+(?:\.\d+){0,2}", text):
+        raise ValueError(f"{kind.title()} must use digits and decimal points only.")
+
+    dot_count = text.count(".")
+    if dot_count == 0:
+        return float(text)
+    if dot_count == 1:
+        degrees_text, remainder_text = text.split(".")
+        if len(remainder_text) == 2 and float(remainder_text) < 60.0:
+            return _degrees_minutes_seconds_to_decimal(float(degrees_text), float(remainder_text), 0.0, kind)
+        return float(text)
+
+    degrees_text, minutes_text, seconds_text = text.split(".")
+    return _degrees_minutes_seconds_to_decimal(float(degrees_text), float(minutes_text), float(seconds_text), kind)
+
+
+def _degrees_minutes_seconds_to_decimal(degrees: float, minutes: float, seconds: float, kind: str) -> float:
+    if not 0.0 <= minutes < 60.0:
+        raise ValueError(f"{kind.title()} minutes must be between 0 and 59.")
+    if not 0.0 <= seconds < 60.0:
+        raise ValueError(f"{kind.title()} seconds must be between 0 and 59.")
+    return degrees + (minutes / 60.0) + (seconds / 3600.0)
 
 
 def assess_mission(latitude: float, longitude: float, heading_deg: float, keel_depth_m: float) -> list[Assessment]:
@@ -200,112 +204,317 @@ def classify_subsea(distance_nm: float, keel_depth_m: float, platform_depth_m: f
     return "Green", "Insufficient keel depth to threaten the subsea asset."
 
 
-def generate_track_svg(
+def render_track_preview_png(
     latitude: float,
     longitude: float,
     heading_deg: float,
     assessments: list[Assessment],
-    width: int = 860,
-    height: int = 560,
-) -> str:
-    padding = 56
+) -> bytes:
+    figure, axis = plt.subplots(figsize=(7.4, 8.6), constrained_layout=True)
+    _draw_track_plot(axis, latitude, longitude, heading_deg, assessments)
+
+    buffer = BytesIO()
+    figure.savefig(buffer, format="png", dpi=180, facecolor="white")
+    plt.close(figure)
+    return buffer.getvalue()
+
+
+def render_report_pdf(
+    latitude: float,
+    longitude: float,
+    heading_deg: float,
+    keel_depth_m: float,
+    assessments: list[Assessment],
+) -> bytes:
+    figure = plt.figure(figsize=(8.5, 11.0), constrained_layout=True)
+    grid = figure.add_gridspec(14, 1)
+    header_axis = figure.add_subplot(grid[0:2, 0])
+    plot_axis = figure.add_subplot(grid[2:10, 0])
+    table_axis = figure.add_subplot(grid[10:, 0])
+
+    _draw_report_header(header_axis, latitude, longitude, heading_deg, keel_depth_m)
+    _draw_track_plot(plot_axis, latitude, longitude, heading_deg, assessments)
+    _draw_assessment_table(table_axis, assessments)
+
+    buffer = BytesIO()
+    figure.savefig(buffer, format="pdf", facecolor="white")
+    plt.close(figure)
+    return buffer.getvalue()
+
+
+def _draw_report_header(
+    axis,
+    latitude: float,
+    longitude: float,
+    heading_deg: float,
+    keel_depth_m: float,
+) -> None:
+    axis.axis("off")
+    axis.text(
+        0.0,
+        0.86,
+        "Iceberg Threat Assessment",
+        fontsize=18,
+        fontweight="bold",
+        color="#0f172a",
+        ha="left",
+        va="top",
+        transform=axis.transAxes,
+    )
+    axis.text(
+        0.0,
+        0.48,
+        (
+            f"Start {format_coordinate_label(latitude, 'latitude')}, {format_coordinate_label(longitude, 'longitude')}    "
+            f"Heading {heading_deg:.0f}°    Keel depth {keel_depth_m:.1f} m"
+        ),
+        fontsize=10.5,
+        color="#334155",
+        ha="left",
+        va="top",
+        transform=axis.transAxes,
+    )
+    axis.text(
+        0.0,
+        0.16,
+        "Track map and threat summary for Hibernia, Hebron, Sea Rose, and Terra Nova.",
+        fontsize=9.5,
+        color="#64748b",
+        ha="left",
+        va="top",
+        transform=axis.transAxes,
+    )
+
+
+def _draw_track_plot(
+    axis,
+    latitude: float,
+    longitude: float,
+    heading_deg: float,
+    assessments: list[Assessment],
+) -> None:
+    bounds, end_latitude, end_longitude = _build_plot_bounds(latitude, longitude, heading_deg, assessments)
+
+    axis.set_facecolor("#ffffff")
+    axis.set_xlim(bounds["lon_min"], bounds["lon_max"])
+    axis.set_ylim(bounds["lat_min"], bounds["lat_max"])
+    axis.set_title("Iceberg track and platform positions", fontsize=12, pad=16, color="#0f172a")
+    axis.grid(which="major", color="#94a3b8", linewidth=0.8, alpha=0.72)
+
+    for spine in axis.spines.values():
+        spine.set_visible(False)
+
+    axis.xaxis.set_major_locator(MultipleLocator(bounds["lon_step"]))
+    axis.yaxis.set_major_locator(MultipleLocator(bounds["lat_step"]))
+    axis.xaxis.set_major_formatter(FuncFormatter(lambda value, _: _format_geo_tick(value, "longitude")))
+    axis.yaxis.set_major_formatter(FuncFormatter(lambda value, _: _format_geo_tick(value, "latitude")))
+
+    axis.tick_params(axis="x", top=True, labeltop=True, bottom=False, labelbottom=False, pad=6, labelsize=9)
+    axis.tick_params(axis="y", right=True, labelright=True, left=False, labelleft=False, pad=10, labelsize=9)
+
+    for label in axis.get_yticklabels():
+        label.set_rotation(270)
+        label.set_va("center")
+        label.set_ha("center")
+
+    axis.plot(
+        [longitude, end_longitude],
+        [latitude, end_latitude],
+        color="#0f172a",
+        linewidth=1.5,
+        zorder=2,
+    )
+    axis.scatter([longitude], [latitude], s=34, color="#0f172a", zorder=3)
+    axis.annotate(
+        "A",
+        xy=(longitude, latitude),
+        xytext=(0, 10),
+        textcoords="offset points",
+        ha="center",
+        va="bottom",
+        fontsize=12,
+        fontweight="bold",
+        color="#0f172a",
+    )
+    axis.text(
+        0.015,
+        0.02,
+        "A = iceberg start",
+        transform=axis.transAxes,
+        fontsize=8.5,
+        color="#475569",
+    )
+
+    for assessment in assessments:
+        platform = assessment.platform
+        axis.scatter(
+            [platform.longitude],
+            [platform.latitude],
+            s=42,
+            facecolors="#ffffff",
+            edgecolors="#0f172a",
+            linewidths=1.1,
+            zorder=3,
+        )
+        axis.annotate(
+            platform.name,
+            xy=(platform.longitude, platform.latitude),
+            xytext=(8, 0),
+            textcoords="offset points",
+            ha="left",
+            va="center",
+            fontsize=9.5,
+            color="#0f172a",
+        )
+
+
+def _draw_assessment_table(axis, assessments: list[Assessment]) -> None:
+    axis.axis("off")
+    axis.text(
+        0.0,
+        1.04,
+        "Threat summary",
+        fontsize=12,
+        fontweight="bold",
+        color="#0f172a",
+        transform=axis.transAxes,
+        va="bottom",
+    )
+
+    rows = [
+        [
+            assessment.platform.name,
+            f"{assessment.distance_nm:.2f} nm",
+            f"{assessment.platform.depth_m:.0f} m",
+            assessment.platform_threat,
+            assessment.subsea_threat,
+        ]
+        for assessment in assessments
+    ]
+    headers = ["Platform", "Distance to Track", "Water Depth", "Platform", "Subsea"]
+    table = axis.table(
+        cellText=rows,
+        colLabels=headers,
+        colWidths=[0.24, 0.20, 0.16, 0.20, 0.20],
+        loc="center",
+        cellLoc="left",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1.0, 1.5)
+
+    for (row, col), cell in table.get_celld().items():
+        cell.set_edgecolor("#cbd5e1")
+        cell.set_linewidth(0.8)
+        if row == 0:
+            cell.set_facecolor("#e2e8f0")
+            cell.set_text_props(weight="bold", color="#0f172a")
+            continue
+        cell.set_text_props(color="#0f172a")
+        if col == 3:
+            cell.set_facecolor(THREAT_FILL[rows[row - 1][3]])
+        elif col == 4:
+            cell.set_facecolor(THREAT_FILL[rows[row - 1][4]])
+        else:
+            cell.set_facecolor("#ffffff")
+
+
+def _build_plot_bounds(
+    latitude: float,
+    longitude: float,
+    heading_deg: float,
+    assessments: list[Assessment],
+) -> tuple[dict[str, float], float, float]:
     direction_x, direction_y = heading_unit_vector(heading_deg)
-    points = [(0.0, 0.0)]
-    for assessment in assessments:
-        points.append(nm_offset(assessment.platform.latitude, assessment.platform.longitude, latitude, longitude))
+    offsets = [
+        nm_offset(assessment.platform.latitude, assessment.platform.longitude, latitude, longitude)
+        for assessment in assessments
+    ]
+    max_distance = max((math.hypot(x_nm, y_nm) for x_nm, y_nm in offsets), default=30.0)
+    ray_length_nm = max(35.0, max_distance + 12.0)
+    end_latitude, end_longitude = latlon_from_nm_offset(
+        direction_x * ray_length_nm,
+        direction_y * ray_length_nm,
+        latitude,
+        longitude,
+    )
 
-    max_distance = max(math.hypot(x, y) for x, y in points[1:]) if len(points) > 1 else 30.0
-    ray_length = max(35.0, max_distance + 12.0)
-    ray_end = (direction_x * ray_length, direction_y * ray_length)
-    points.append(ray_end)
+    latitudes = [latitude, end_latitude, *(assessment.platform.latitude for assessment in assessments)]
+    longitudes = [longitude, end_longitude, *(assessment.platform.longitude for assessment in assessments)]
 
-    min_x = min(x for x, _ in points)
-    max_x = max(x for x, _ in points)
-    min_y = min(y for _, y in points)
-    max_y = max(y for _, y in points)
-    span_x = max(max_x - min_x, 1.0)
-    span_y = max(max_y - min_y, 1.0)
-    plot_width = width - (padding * 2)
-    plot_height = height - (padding * 2)
-    scale = min(plot_width / span_x, plot_height / span_y)
+    lat_span = max(max(latitudes) - min(latitudes), 0.35)
+    lon_span = max(max(longitudes) - min(longitudes), 0.35)
+    lat_step = _choose_tick_step(lat_span)
+    lon_step = _choose_tick_step(lon_span)
+    lat_pad = max(lat_step * 0.55, lat_span * 0.12)
+    lon_pad = max(lon_step * 0.55, lon_span * 0.12)
 
-    def project(x_nm: float, y_nm: float) -> tuple[float, float]:
-        x_px = padding + ((x_nm - min_x) * scale)
-        y_px = height - padding - ((y_nm - min_y) * scale)
-        return x_px, y_px
+    bounds = {
+        "lat_step": lat_step,
+        "lon_step": lon_step,
+        "lat_min": math.floor((min(latitudes) - lat_pad) / lat_step) * lat_step,
+        "lat_max": math.ceil((max(latitudes) + lat_pad) / lat_step) * lat_step,
+        "lon_min": math.floor((min(longitudes) - lon_pad) / lon_step) * lon_step,
+        "lon_max": math.ceil((max(longitudes) + lon_pad) / lon_step) * lon_step,
+    }
+    return bounds, end_latitude, end_longitude
 
-    grid_step = 5.0
-    grid_lines = []
-    x_tick = math.floor(min_x / grid_step) * grid_step
-    while x_tick <= max_x:
-        x_px, _ = project(x_tick, 0.0)
-        grid_lines.append(
-            f'<line x1="{x_px:.1f}" y1="{padding}" x2="{x_px:.1f}" y2="{height - padding}" class="grid" />'
-        )
-        x_tick += grid_step
 
-    y_tick = math.floor(min_y / grid_step) * grid_step
-    while y_tick <= max_y:
-        _, y_px = project(0.0, y_tick)
-        grid_lines.append(
-            f'<line x1="{padding}" y1="{y_px:.1f}" x2="{width - padding}" y2="{y_px:.1f}" class="grid" />'
-        )
-        y_tick += grid_step
+def latlon_from_nm_offset(
+    x_nm: float,
+    y_nm: float,
+    origin_lat: float,
+    origin_lon: float,
+) -> tuple[float, float]:
+    latitude = origin_lat + (y_nm / 60.0)
+    mean_lat_rad = math.radians((latitude + origin_lat) / 2.0)
+    longitude = origin_lon + (x_nm / (60.0 * math.cos(mean_lat_rad)))
+    return latitude, longitude
 
-    start_x, start_y = project(0.0, 0.0)
-    end_x, end_y = project(*ray_end)
 
-    platform_layers = []
-    for assessment in assessments:
-        x_nm, y_nm = nm_offset(
-            assessment.platform.latitude,
-            assessment.platform.longitude,
-            latitude,
-            longitude,
-        )
-        px, py = project(x_nm, y_nm)
-        outer_color = COLOR_HEX[assessment.subsea_threat]
-        inner_color = COLOR_HEX[assessment.platform_threat]
-        label_dx = 12 if x_nm <= 0 else -12
-        anchor = "start" if label_dx > 0 else "end"
-        platform_layers.append(
-            "\n".join(
-                [
-                    f'<circle cx="{px:.1f}" cy="{py:.1f}" r="11" fill="none" stroke="{outer_color}" stroke-width="4" />',
-                    f'<circle cx="{px:.1f}" cy="{py:.1f}" r="6" fill="{inner_color}" stroke="#f8f6ef" stroke-width="2" />',
-                    f'<text x="{px + label_dx:.1f}" y="{py - 12:.1f}" text-anchor="{anchor}" class="label">{assessment.platform.name}</text>',
-                    f'<text x="{px + label_dx:.1f}" y="{py + 6:.1f}" text-anchor="{anchor}" class="small-label">{assessment.distance_nm:.1f} nm</text>',
-                ]
-            )
-        )
+def _choose_tick_step(span: float) -> float:
+    for step in (0.1, 0.25, 0.5, 1.0, 2.0):
+        if span / step <= 6.0:
+            return step
+    return 5.0
 
-    return f"""
-<svg viewBox="0 0 {width} {height}" role="img" aria-label="Iceberg trajectory plot" class="plot">
-  <defs>
-    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
-      <polygon points="0 0, 8 3, 0 6" fill="#162238"></polygon>
-    </marker>
-  </defs>
-  <rect x="0" y="0" width="{width}" height="{height}" rx="24" class="plot-bg"></rect>
-  {''.join(grid_lines)}
-  <rect x="{padding}" y="{padding}" width="{plot_width}" height="{plot_height}" class="frame"></rect>
-  <line x1="{start_x:.1f}" y1="{start_y:.1f}" x2="{end_x:.1f}" y2="{end_y:.1f}" class="track" marker-end="url(#arrowhead)" />
-  <circle cx="{start_x:.1f}" cy="{start_y:.1f}" r="8" class="iceberg"></circle>
-  <text x="{start_x + 12:.1f}" y="{start_y - 14:.1f}" class="label">Iceberg</text>
-  <text x="{start_x + 12:.1f}" y="{start_y + 4:.1f}" class="small-label">Heading {heading_deg:.0f}°</text>
-  {''.join(platform_layers)}
-  <g class="legend">
-    <rect x="{width - 218}" y="28" width="186" height="102" rx="16" class="legend-box"></rect>
-    <text x="{width - 198}" y="54" class="legend-title">Marker legend</text>
-    <circle cx="{width - 178}" cy="78" r="10" fill="none" stroke="#c03a2b" stroke-width="4"></circle>
-    <circle cx="{width - 178}" cy="78" r="6" fill="#1b7f46" stroke="#f8f6ef" stroke-width="2"></circle>
-    <text x="{width - 158}" y="82" class="small-label">Outer ring: subsea threat</text>
-    <circle cx="{width - 178}" cy="106" r="6" fill="#c78c0a" stroke="#f8f6ef" stroke-width="2"></circle>
-    <text x="{width - 158}" y="110" class="small-label">Inner dot: platform threat</text>
-  </g>
-  <text x="{padding}" y="{height - 16}" class="axis-label">Relative nautical miles from iceberg start</text>
-</svg>
-""".strip()
+
+def _format_geo_tick(value: float, kind: str) -> str:
+    absolute = abs(value)
+    degrees = int(absolute)
+    minutes = int(round((absolute - degrees) * 60.0))
+    if minutes == 60:
+        degrees += 1
+        minutes = 0
+
+    if kind == "latitude":
+        hemisphere = "N" if value >= 0 else "S"
+    else:
+        hemisphere = "E" if value >= 0 else "W"
+
+    return f"{degrees}°{minutes:02d}'{hemisphere}"
+
+
+def format_coordinate_label(value: float, kind: str) -> str:
+    absolute = abs(value)
+    degrees = int(absolute)
+    minutes_float = (absolute - degrees) * 60.0
+    minutes = int(minutes_float)
+    seconds = round((minutes_float - minutes) * 60.0)
+
+    if seconds == 60:
+        minutes += 1
+        seconds = 0
+    if minutes == 60:
+        degrees += 1
+        minutes = 0
+
+    if kind == "latitude":
+        hemisphere = "N" if value >= 0 else "S"
+    else:
+        hemisphere = "E" if value >= 0 else "W"
+
+    return f'{degrees}°{minutes:02d}\'{seconds:02d}"{hemisphere}'
 
 
 def _validate_coordinate_range(value: float, kind: str) -> None:
