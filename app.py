@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from base64 import b64encode
 from io import BytesIO
+import os
 
 from flask import Flask, render_template, request, send_file
 
@@ -74,4 +75,4 @@ def export_pdf():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=int(os.environ.get("PORT", 5001)))
